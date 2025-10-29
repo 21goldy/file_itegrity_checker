@@ -3,9 +3,11 @@ package utils
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"time"
 )
 
@@ -40,20 +42,21 @@ func WatchFile(filePath string) {
 
 		lastHash := GetLatestHash(filePath)
 		if lastHash == "" {
-			AddEntry(filePath, hashHex, timestamp) // here
-			fmt.Printf("[%s] ✅ Initial hash stored.\n", timestamp)
+			AddEntry(filePath, hashHex, timestamp)
+			fmt.Printf("[%s] ✅ Initial hash stored.\n", timestamp.Format(time.RFC3339))
 		} else if hashHex != lastHash {
 			fmt.Println("🔄 File changed!")
-			fmt.Printf("🕒 [%s] New hash recorded.\n", timestamp)
-			AddEntry(filePath, hashHex, timestamp) // here
+			fmt.Printf("🕒 [%s] New hash recorded.\n", timestamp.Format(time.RFC3339))
+			AddEntry(filePath, hashHex, timestamp)
 		} else {
-			fmt.Printf("[%s] No change detected.\n", timestamp)
+			fmt.Printf("[%s] No change detected.\n", timestamp.Format(time.RFC3339))
 		}
 
 		time.Sleep(5 * time.Second)
 	}
 }
 
+// --- Creates unique hash file name ---
 func createhashFileName(filepath string) string {
 	hashfile := sha256.Sum256([]byte(filepath))
 	return fmt.Sprintf("secret-%s-256.json", hex.EncodeToString(hashfile[:]))
@@ -77,45 +80,103 @@ func ComputeFileHash(filePath string) (string, time.Time, error) {
 	return hashHex, timestamp, nil
 }
 
+// --- Add a new hash entry ---
 func AddEntry(filePath, hashHex string, timestamp time.Time) error {
-	hashfilename := createhashFileName(filePath) //secret-bajshqhhjgdhgduyqgdqshgdhuqgdwyggsbqhgd-256.json
-	fmt.Println(hashfilename)
-	// check if this file exists in .secrets-hashes
-	// if yes
-	// open the file
-	// read the content
-	// extract it to []HashEntry
-	// append to the  with the hashhex adt timestamp
-	// and write back to the file (basically append back to the file)
-	// else
-	// create a new slice of []HashEntry
-	// append to the  with the hashhex adt timestamp
-	// create the file and write the new json dara
+	hashfilename := createhashFileName(filePath)
+	secretsDir := ".secret-hashes"
 
+	// ensure directory exists
+	if _, err := os.Stat(secretsDir); os.IsNotExist(err) {
+		if err := os.Mkdir(secretsDir, 0755); err != nil {
+			return fmt.Errorf("failed to create secrets dir: %w", err)
+		}
+	}
+
+	filePathFull := filepath.Join(secretsDir, hashfilename)
+	var entries []HashEntry
+
+	// if file exists, load existing entries
+	if _, err := os.Stat(filePathFull); err == nil {
+		data, err := os.ReadFile(filePathFull)
+		if err == nil && len(data) > 0 {
+			_ = json.Unmarshal(data, &entries)
+		}
+	}
+
+	// avoid duplicate hash (only update time if same hash)
+	if len(entries) > 0 && entries[len(entries)-1].Hash == hashHex {
+		entries[len(entries)-1].Timestamp = timestamp
+	} else {
+		entries = append(entries, HashEntry{Hash: hashHex, Timestamp: timestamp})
+	}
+
+	// write back
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal json: %w", err)
+	}
+
+	if err := os.WriteFile(filePathFull, data, 0644); err != nil {
+		return fmt.Errorf("failed to write hash file: %w", err)
+	}
+
+	fmt.Printf("💾 Hash entry saved to %s\n", filePathFull)
 	return nil
 }
 
+// --- Retrieve latest hash ---
 func GetLatestHash(filePath string) string {
-	hashfilename := createhashFileName(filePath) //secret-bajshqhhjgdhgduyqgdqshgdhuqgdwyggsbqhgd-256.json
-	fmt.Println(hashfilename)
+	hashfilename := createhashFileName(filePath)
+	secretsDir := ".secret-hashes"
+	filePathFull := filepath.Join(secretsDir, hashfilename)
 
-	// check if the file extist
-	// if
-	// 	opent the file
-	// extract the []HashEntry
-	// returh []HashEntry[-1].Hash
-	// else
-	// 	return ""
-	return ""
+	if _, err := os.Stat(filePathFull); os.IsNotExist(err) {
+		return ""
+	}
+
+	data, err := os.ReadFile(filePathFull)
+	if err != nil {
+		fmt.Printf("⚠️  Failed to read hash file: %v\n", err)
+		return ""
+	}
+
+	var entries []HashEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		fmt.Printf("⚠️  Failed to parse hash file: %v\n", err)
+		return ""
+	}
+
+	if len(entries) == 0 {
+		return ""
+	}
+	return entries[len(entries)-1].Hash
 }
 
+// --- Print all hash history ---
 func PrintHashHistory(filePath string) {
-	hashfilename := createhashFileName(filePath) //secret-bajshqhhjgdhgduyqgdqshgdhuqgdwyggsbqhgd-256.json
-	fmt.Println(hashfilename)
-	// check if the file extist
-	// if
-	// 	opent the file
-	// extract the []HashEntry
-	// for each entry :
-	//    print (timestamp : hash )
+	hashfilename := createhashFileName(filePath)
+	secretsDir := ".secret-hashes"
+	filePathFull := filepath.Join(secretsDir, hashfilename)
+
+	if _, err := os.Stat(filePathFull); os.IsNotExist(err) {
+		fmt.Println("ℹ️  No hash history found.")
+		return
+	}
+
+	data, err := os.ReadFile(filePathFull)
+	if err != nil {
+		fmt.Printf("❌ Failed to read hash history: %v\n", err)
+		return
+	}
+
+	var entries []HashEntry
+	if err := json.Unmarshal(data, &entries); err != nil {
+		fmt.Printf("❌ Failed to parse hash history: %v\n", err)
+		return
+	}
+
+	fmt.Println("📜 Hash History:")
+	for _, e := range entries {
+		fmt.Printf("🕒 %s → %s\n", e.Timestamp.Format(time.RFC3339), e.Hash)
+	}
 }
