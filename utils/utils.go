@@ -6,15 +6,13 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
-	"strings"
 	"time"
 )
 
 // HashEntry stores a file hash + timestamp
 type HashEntry struct {
-	Hash      string
-	Timestamp string
+	Hash      string    `json:"hash"`
+	Timestamp time.Time `json:"timestamp"`
 }
 
 var (
@@ -22,24 +20,6 @@ var (
 	watching     = false
 	stopWatchSig = make(chan bool)
 )
-
-/*
-
-type hash-history struct{
-  UpdatedTimeStamp time.Time `json:"timestamp"`
-  hash string `json:"hash"` }
-
-setTimeStamp(filePath string, hash string, timestamp time.Timestamp){
-	filehash = sha-256.hashstring(strings.TrimSpace(filepath),)
-	this function should append `type hash-history list` to a file with the name filehash.json
-}
-
-getHistory(filepath string){
-	filehash = sha-256.hashstring(strings.TrimSpace(filepath),)
-	fetch data from filehash.json, and display it
-}
-
-*/
 
 // --- Watches over the file ---
 func WatchFile(filePath string) {
@@ -58,127 +38,84 @@ func WatchFile(filePath string) {
 			continue
 		}
 
-		lastHash := GetLastHash(filePath)
+		lastHash := GetLatestHash(filePath)
 		if lastHash == "" {
-			AddNewEntry(filePath, hashHex, timestamp)
+			AddEntry(filePath, hashHex, timestamp) // here
 			fmt.Printf("[%s] ✅ Initial hash stored.\n", timestamp)
 		} else if hashHex != lastHash {
 			fmt.Println("🔄 File changed!")
 			fmt.Printf("🕒 [%s] New hash recorded.\n", timestamp)
-			AddNewEntry(filePath, hashHex, timestamp)
+			AddEntry(filePath, hashHex, timestamp) // here
 		} else {
-			UpdateTimestamp(filePath, timestamp)
 			fmt.Printf("[%s] No change detected.\n", timestamp)
 		}
 
-		StoreLatestHash(filePath, hashHex)
 		time.Sleep(5 * time.Second)
 	}
 }
 
-// --- Manual single-file processing ---
-func ProcessFile(filePath string) {
-	hashHex, timestamp, err := ComputeFileHash(filePath)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Error processing file:", err)
-		return
-	}
-
-	lastHash := GetLastHash(filePath)
-	switch {
-	case lastHash == "":
-		AddNewEntry(filePath, hashHex, timestamp)
-		fmt.Println("✅ New file hash added.")
-	case hashHex != lastHash:
-		AddNewEntry(filePath, hashHex, timestamp)
-		fmt.Println("⚠️  Hash changed! Added new entry.")
-	default:
-		UpdateTimestamp(filePath, timestamp)
-		fmt.Println("⏱️  Hash unchanged — timestamp updated.")
-	}
-
-	StoreLatestHash(filePath, hashHex)
+func createhashFileName(filepath string) string {
+	hashfile := sha256.Sum256([]byte(filepath))
+	return fmt.Sprintf("secret-%s-256.json", hex.EncodeToString(hashfile[:]))
 }
 
 // --- Computes file hash ---
-func ComputeFileHash(filePath string) (string, string, error) {
+func ComputeFileHash(filePath string) (string, time.Time, error) {
 	file, err := os.Open(filePath)
 	if err != nil {
-		return "", "", fmt.Errorf("failed to open file: %w", err)
+		return "", time.Time{}, fmt.Errorf("failed to open file: %w", err)
 	}
 	defer file.Close()
 
 	hasher := sha256.New()
 	if _, err := io.Copy(hasher, file); err != nil {
-		return "", "", fmt.Errorf("failed to hash file: %w", err)
+		return "", time.Time{}, fmt.Errorf("failed to hash file: %w", err)
 	}
 
 	hashHex := hex.EncodeToString(hasher.Sum(nil))
-	timestamp := time.Now().Format("2006-01-02 15:04:05")
+	timestamp := time.Now()
 	return hashHex, timestamp, nil
 }
 
-// --- Helper functions ---
-func AddNewEntry(filePath, hashHex, timestamp string) {
-	entry := HashEntry{Hash: hashHex, Timestamp: timestamp}
-	hashMap[filePath] = append(hashMap[filePath], entry)
+func AddEntry(filePath, hashHex string, timestamp time.Time) error {
+	hashfilename := createhashFileName(filePath) //secret-bajshqhhjgdhgduyqgdqshgdhuqgdwyggsbqhgd-256.json
+	fmt.Println(hashfilename)
+	// check if this file exists in .secrets-hashes
+	// if yes
+	// open the file
+	// read the content
+	// extract it to []HashEntry
+	// append to the  with the hashhex adt timestamp
+	// and write back to the file (basically append back to the file)
+	// else
+	// create a new slice of []HashEntry
+	// append to the  with the hashhex adt timestamp
+	// create the file and write the new json dara
+
+	return nil
 }
 
-// --- Updates time stamp ---
-func UpdateTimestamp(filePath, timestamp string) {
-	if entries, ok := hashMap[filePath]; ok && len(entries) > 0 {
-		hashMap[filePath][len(entries)-1].Timestamp = timestamp
-	}
-}
+func GetLatestHash(filePath string) string {
+	hashfilename := createhashFileName(filePath) //secret-bajshqhhjgdhgduyqgdqshgdhuqgdwyggsbqhgd-256.json
+	fmt.Println(hashfilename)
 
-// --- This fetches last hash (CHECK) ---
-func GetLastHash(filePath string) string {
-	if entries, ok := hashMap[filePath]; ok && len(entries) > 0 {
-		return entries[len(entries)-1].Hash
-	}
+	// check if the file extist
+	// if
+	// 	opent the file
+	// extract the []HashEntry
+	// returh []HashEntry[-1].Hash
+	// else
+	// 	return ""
 	return ""
 }
 
-// --- This prints the hash history for the file ---
 func PrintHashHistory(filePath string) {
-	if entries, ok := hashMap[filePath]; ok {
-		fmt.Println("\n📜 Hash History:")
-		for i, e := range entries {
-			fmt.Printf("%d. %s  (%s)\n", i+1, e.Hash, e.Timestamp)
-		}
-	} else {
-		fmt.Println("No hash history found for this file.")
-	}
-}
-
-// --- File I/O for persistent hashes ---
-func ReadLatestHash(filePath string) string {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return ""
-	}
-	hashFile := filepath.Join(home, ".secret_hashes", filepath.Base(filePath)+".sha256")
-	data, err := os.ReadFile(hashFile)
-	if err != nil {
-		return ""
-	}
-	parts := strings.Fields(string(data))
-	if len(parts) > 0 {
-		return parts[0]
-	}
-	return ""
-}
-
-// --- Store latest hashes ---
-func StoreLatestHash(filePath, hashHex string) {
-	home, err := os.UserHomeDir()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, "Failed to find home directory:", err)
-		return
-	}
-	secretDir := filepath.Join(home, ".secret_hashes")
-	os.MkdirAll(secretDir, 0700)
-	hashFile := filepath.Join(secretDir, filepath.Base(filePath)+".sha256")
-	content := fmt.Sprintf("%s  %s\n", hashHex, time.Now().Format("2006-01-02 15:04:05"))
-	os.WriteFile(hashFile, []byte(content), 0600)
+	hashfilename := createhashFileName(filePath) //secret-bajshqhhjgdhgduyqgdqshgdhuqgdwyggsbqhgd-256.json
+	fmt.Println(hashfilename)
+	// check if the file extist
+	// if
+	// 	opent the file
+	// extract the []HashEntry
+	// for each entry :
+	//    print (timestamp : hash )
 }
